@@ -1,12 +1,13 @@
-#!/usr/bin/env python3
-r"""
+"""
 自动为 VS Code Codex 扩展的 webview bundle 注入最新 + 上一版 codex-max 模型，
-并移除 CHAT_GPT_AUTH_ONLY_MODELS 对 codex 系列的限制，确保 apikey 也能选择。
+同时处理 apikey 和 chatgpt (OAuth) 两种认证方式的模型列表，
+并清空 CHAT_GPT_AUTH_ONLY_MODELS，确保所有模型都能用 apikey 访问。
 
 特性：
+- 支持 apikey 和 chatgpt (OAuth) 两种认证方式的模型列表 patch
 - 自动发现（--auto）插件目录：
   - macOS/Linux: $HOME/.vscode/extensions/openai.chatgpt*
-  - Windows: %USERPROFILE%\.vscode\extensions\openai.chatgpt*
+  - Windows: %USERPROFILE%\\.vscode\\extensions\\openai.chatgpt*
   （WSL/特殊安装请手动传文件路径）
 - 每个目标文件会生成同目录 .bak 备份，可用 --restore 回滚。
 - 补丁完成后请重启 VS Code 以加载新资源。
@@ -115,33 +116,48 @@ def build_apikey_list(text: str, include_mini: bool = False) -> List[str]:
     return order_models(candidates)
 
 
-def ensure_apikey(text: str, include_mini: bool = False) -> Tuple[str, bool]:
-    """Rewrite apikey:... to include desired model list."""
-    new_list = build_apikey_list(text, include_mini=include_mini)
-    new_list_str = "apikey:[" + ",".join(new_list) + "]"
+def replace_auth_method_array(text: str, field: str, new_items: List[str]) -> Tuple[str, bool]:
+    """Replace array content for a specific field in MODEL_ORDER_BY_AUTH_METHOD.
+    
+    Handles both single-line and multi-line array formats, including spread operators.
+    """
+    new_array = "[" + ",".join(new_items) + "]"
+    new_field = f"{field}:{new_array}"
+    
+    # 匹配 field: [ ... ] 形式，可能跨多行，可能包含展开运算符 ...
+    # 使用 re.DOTALL 让 . 匹配换行符
     pattern = re.compile(
-        r"apikey:\s*(?:\[\s*[^]]*?\s*\]|DEFAULT_MODEL_ORDER|\[\s*\.\.\.DEFAULT_MODEL_ORDER\s*\])"
+        rf'{field}:\s*\[[^\]]*\]',
+        re.DOTALL
     )
+    
     if pattern.search(text):
-        return pattern.sub(new_list_str, text, count=1), True
-
-    m = re.search(r"apikey:\[([^\]]*?)\]", text)
-    if m:
-        new_text = text[: m.start()] + new_list_str + text[m.end() :]
-        return new_text, True
+        return pattern.sub(new_field, text, count=1), True
+    
     return text, False
 
 
+def ensure_apikey(text: str, include_mini: bool = False) -> Tuple[str, bool]:
+    """Rewrite apikey:... to include desired model list."""
+    new_list = build_apikey_list(text, include_mini=include_mini)
+    return replace_auth_method_array(text, "apikey", new_list)
+
+
+def ensure_chatgpt(text: str, include_mini: bool = False) -> Tuple[str, bool]:
+    """Rewrite chatgpt:... (OAuth) to include desired model list."""
+    new_list = build_apikey_list(text, include_mini=include_mini)
+    return replace_auth_method_array(text, "chatgpt", new_list)
+
+
 def remove_auth_only(text: str) -> Tuple[str, bool]:
-    """Remove codex-only entries from CHAT_GPT_AUTH_ONLY_MODELS."""
+    """Clear CHAT_GPT_AUTH_ONLY_MODELS entirely so all models work with apikey."""
     m = re.search(r"CHAT_GPT_AUTH_ONLY_MODELS=new Set\(\[([^\]]*?)\]\)", text)
     if not m:
         return text, False
-    items = [p.strip() for p in m.group(1).split(",") if p.strip()]
-    filtered = [p for p in items if "codex" not in p]
-    if filtered == items:
+    if not m.group(1).strip():
+        # 已经是空的了
         return text, False
-    replacement = "CHAT_GPT_AUTH_ONLY_MODELS=new Set([" + ",".join(filtered) + "])"
+    replacement = "CHAT_GPT_AUTH_ONLY_MODELS=new Set([])"
     new_text = text[: m.start()] + replacement + text[m.end() :]
     return new_text, True
 
@@ -154,11 +170,19 @@ def patch_file(path: Path, include_mini: bool = False) -> None:
 
     original = path.read_text()
     text, changed_apikey = ensure_apikey(original, include_mini=include_mini)
+    text, changed_chatgpt = ensure_chatgpt(text, include_mini=include_mini)
     text, changed_auth = remove_auth_only(text)
 
-    if changed_apikey or changed_auth:
+    if changed_apikey or changed_chatgpt or changed_auth:
         path.write_text(text)
-        print(f"[patched] {path}")
+        changes = []
+        if changed_apikey:
+            changes.append("apikey")
+        if changed_chatgpt:
+            changes.append("chatgpt")
+        if changed_auth:
+            changes.append("auth_only")
+        print(f"[patched] {path} ({', '.join(changes)})")
     else:
         print(f"[skip]    {path} (already compliant)")
 
