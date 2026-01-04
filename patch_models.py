@@ -135,11 +135,9 @@ def replace_auth_method_array(text: str, field: str, new_items: List[str]) -> Tu
     if pattern_array.search(text):
         return pattern_array.sub(new_field, text, count=1), True
     
-    # 然后尝试匹配 field: VARIABLE_NAME 形式（如 apikey: DEFAULT_MODEL_ORDER）
-    # 变量名由字母、数字、下划线组成，以字母或下划线开头
+    # 然后尝试匹配 field: DEFAULT_MODEL_ORDER 形式
     pattern_var = re.compile(
-        rf'{field}:\s*[A-Z_][A-Z0-9_]*',
-        re.IGNORECASE
+        rf'{field}:\s*DEFAULT_MODEL_ORDER'
     )
     
     if pattern_var.search(text):
