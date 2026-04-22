@@ -177,13 +177,6 @@ jobs:
           echo "Found index files:"
           echo "$INDEX_FILES"
           
-          # 运行 patch 脚本
-          if [ "$INCLUDE_MINI" = "true" ]; then
-            python patch_models.py --include-mini $INDEX_FILES
-          else
-            python patch_models.py $INDEX_FILES
-          fi
-          
           # 保存工作目录名
           echo "WORK_DIR=$WORK_DIR" >> $GITHUB_ENV
 
